@@ -8,7 +8,6 @@ module NcboCron
   @settings_run = false
   def config(&block)
     return if @settings_run
-    @settings_run = true
 
     # Redis is used for two separate things in ncbo_cron:
     # 1) locating the queue for the submissions to be processed and
@@ -30,8 +29,10 @@ module NcboCron
     @settings.enable_flush ||= true
     @settings.enable_warmq ||= true
     @settings.enable_mapping_counts ||= true
-    # enable ontology analytics
+    # enable ontology analytics (GA4)
     @settings.enable_ontology_analytics ||= true
+    # enable ontology analytics (cloudflare)
+    @settings.enable_cloudflare_analytics ||= true
     # enable ontologies report
     @settings.enable_ontologies_report ||= true
     # enable index synchronization
@@ -62,6 +63,9 @@ module NcboCron
     # Ontology analytics refresh schedule
     # 15 0 * * 1 - run once a week on Monday at 12:15AM
     @settings.cron_ontology_analytics ||= "15 0 * * 1"
+    # Cloudflare analytics schedule
+    # 0 1 * * * - run daily at 1:00am
+    @settings.cron_cloudflare_analytics ||= '0 1 * * *'
     # Ontologies report generation schedule
     # 30 1 * * * - run daily at 1:30AM
     @settings.cron_ontologies_report ||= "30 1 * * *"
@@ -82,30 +86,28 @@ module NcboCron
     @settings.cron_dictionary_generation_cron_job ||= "30 3 * * *"
 
     @settings.log_level ||= :info
-    unless (@settings.log_path && File.exists?(@settings.log_path))
-      log_dir = File.expand_path("../../../logs", __FILE__)
-      FileUtils.mkdir_p(log_dir)
-      @settings.log_path = "#{log_dir}/scheduler.log"
-    end
-    if File.exists?("/var/run/ncbo_cron")
-      pid_path = File.expand_path("/var/run/ncbo_cron/ncbo_cron.pid", __FILE__)
-    else
-      pid_path = File.expand_path("../../../ncbo_cron.pid", __FILE__)
-    end
-    @settings.pid_path ||= pid_path
+    @settings.log_dir  ||= nil          # let caller provide it
+    @settings.log_path ||= nil          # will build it later
 
     # minutes between process queue checks (override seconds)
     @settings.minutes_between ||= 5
     # seconds between process queue checks
     @settings.seconds_between ||= nil
 
-    ############## VM specific settings ########################
+    ############## OntoPortal Appliance specific settings ########################
     # A config file that identifies the current version of Ontoportal
-    @settings.versions_file_path = "/srv/ontoportal/virtual_appliance/deployment/versions"
+    @settings.versions_file_path = "/opt/ontoportal/virtual_appliance/deployment/versions"
     # An endpoint that checks for Ontoportal update availability
     @settings.update_check_endpoint_url = "https://updatecheck.ontoportal.org/latestversion"
 
     # Override defaults
     yield @settings if block_given?
+
+    # ── choose defaults *after* user input ───────────────────────────────
+    @settings.log_dir  ||= File.expand_path("log", Dir.pwd)
+    @settings.log_path ||= File.join(@settings.log_dir, "scheduler.log")
+    @settings.pid_path ||= File.expand_path("ncbo_cron.pid", Dir.pwd)
+
+    @settings_run = true
   end
 end
