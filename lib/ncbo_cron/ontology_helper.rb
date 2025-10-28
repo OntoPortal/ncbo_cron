@@ -36,15 +36,27 @@ module NcboCron
         end
       end
 
-      def self.do_ontology_pull(ontology_acronym, enable_pull_umls = false, umls_download_url = '', logger = nil,
-                                add_to_queue = true)
+      class NoSubmissionException < StandardError
+        attr_reader :acronym
+
+        def initialize(acronym)
+          @acronym = acronym
+          super("NoSubmissionEception: No submission found for ontology #{acronym}")
+        end
+      end
+
+      def self.do_ontology_pull(ontology_acronym,
+                                enable_pull_umls: false,
+                                umls_download_url: '',
+                                logger: nil,
+                                add_to_queue: true)
         logger ||= Logger.new($stdout)
         ont = LinkedData::Models::Ontology.find(ontology_acronym).include(:acronym).first
         new_submission = nil
         raise StandardError, "Ontology #{ontology_acronym} not found" if ont.nil?
 
         last = ont.latest_submission(status: :any)
-        raise StandardError, "No submission found for #{ontology_acronym}" if last.nil?
+        raise NoSubmissionException.new(ontology_acronym) if last.nil?
 
         last.bring(:hasOntologyLanguage) if last.bring?(:hasOntologyLanguage)
         if !enable_pull_umls && last.hasOntologyLanguage.umls?
@@ -108,32 +120,17 @@ module NcboCron
         new_sub.submissionStatus = nil
         new_sub.creationDate = nil
         new_sub.missingImports = nil
+        new_sub.masterFileName = nil
         new_sub.metrics = nil
         full_file_path = File.expand_path(file_location)
 
         # check if OWLAPI is able to parse the file before creating a new submission
-        owlapi = LinkedData::Parser::OWLAPICommand.new(
-          full_file_path,
-          File.expand_path(new_sub.data_folder.to_s),
-          logger: logger)
-        owlapi.disable_reasoner
-        parsable = true
-
-        begin
-          owlapi.parse
-        rescue Exception => e
-          logger.error("The new file for ontology #{ont.acronym}, submission id: #{submission_id} did not clear OWLAPI: #{e.class}: #{e.message}\n#{e.backtrace.join("\n\t")}")
-          logger.error("A new submission has NOT been created.")
-          logger.flush
-          parsable = false
-        end
-
-        if parsable
+        if new_sub.parsable?(logger: logger)
           if new_sub.valid?
-            new_sub.save()
+            new_sub.save
 
             if add_to_queue
-              self.queue_submission(new_sub, { all: true })
+              queue_submission(new_sub, { all: true })
               logger.info("OntologyPull created a new submission (#{submission_id}) for ontology #{ont.acronym}")
             end
           else
@@ -141,6 +138,9 @@ module NcboCron
             logger.flush
           end
         else
+          logger.error("The new file for ontology #{ont.acronym}, submission id: #{submission_id} did not clear OWLAPI: #{e.class}: #{e.message}\n#{e.backtrace.join("\n\t")}")
+          logger.error("A new submission has NOT been created.")
+          logger.flush
           # delete the bad file
           File.delete full_file_path if File.exist? full_file_path
         end
