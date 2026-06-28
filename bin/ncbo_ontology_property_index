@@ -109,6 +109,50 @@ def valid_url?(url)
   url.kind_of?(URI::HTTP) || url.kind_of?(URI::HTTPS)
 end
 
+class PropertySearchPreflightError < StandardError; end
+
+def property_search_preflight_error(reason, solr_core_url)
+  PropertySearchPreflightError.new(
+    "Property index preflight failed for #{solr_core_url}: #{reason}. " \
+    "No property index data was cleared or indexed. " \
+    "Verify the configured property search URL and that the Solr property core is running."
+  )
+end
+
+def preflight_property_search!(solr_core_url)
+  begin
+    property_search_client = Goo.search_connection(:property)
+  rescue StandardError => e
+    raise property_search_preflight_error(
+      "unable to obtain Goo.search_connection(:property) (#{e.class}: #{e.message})",
+      solr_core_url
+    )
+  end
+
+  if property_search_client.nil?
+    raise property_search_preflight_error(
+      "Goo.search_connection(:property) returned nil",
+      solr_core_url
+    )
+  end
+
+  unless property_search_client.respond_to?(:get)
+    raise property_search_preflight_error(
+      "Goo.search_connection(:property) did not return an RSolr client",
+      solr_core_url
+    )
+  end
+
+  begin
+    property_search_client.get('select', params: { q: '*:*', rows: 0, wt: 'json' })
+  rescue StandardError => e
+    raise property_search_preflight_error(
+      "unable to query the property Solr core (#{e.class}: #{e.message})",
+      solr_core_url
+    )
+  end
+end
+
 abort("The Solr core URL you provided is invalid. Aborting...\n\n") unless valid_url?(options[:solr_core_url])
 
 if options[:all] && options[:solr_core_url].downcase == LinkedData.settings.property_search_server_url.downcase
@@ -137,9 +181,18 @@ begin
   puts msg
   logger.info(msg)
 
-  Goo.configure do |conf|
-    conf.add_search_backend(:property, service: options[:solr_core_url])
+  begin
+    Goo.configure do |conf|
+      conf.add_search_backend(:property, service: options[:solr_core_url])
+    end
+  rescue StandardError => e
+    raise property_search_preflight_error(
+      "unable to configure the property search backend (#{e.class}: #{e.message})",
+      options[:solr_core_url]
+    )
   end
+
+  preflight_property_search!(options[:solr_core_url])
 
   indexed_ontologies = []
   remaining_ontologies = options[:ontologies].length
@@ -176,6 +229,10 @@ begin
   end
   puts msg
   logger.info(msg)
+rescue PropertySearchPreflightError => e
+  logger.error(e.message) if logger
+  puts e.message
+  exit(1)
 rescue Exception => e
   msg = "Failed property indexing with exception: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}"
   logger.error(msg)
