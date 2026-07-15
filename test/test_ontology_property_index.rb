@@ -46,15 +46,24 @@ class TestOntologyPropertyIndex < Minitest::Test
     assert_match(/Completed processing property index for all ontologies/, result[:output])
   end
 
+  def test_property_search_preflight_uses_configured_url_and_bounded_timeout
+    result = run_property_index('healthy')
+
+    assert result[:status].success?, result[:output]
+    assert_equal 'http://localhost:8983/solr/prop_search_core1|10,10', result[:connect_options]
+  end
+
   private
 
   def run_property_index(property_search_stub)
     Dir.mktmpdir do |dir|
       prepare_stubbed_tree(dir)
       marker = File.join(dir, 'clear_called')
+      connect_marker = File.join(dir, 'connect_options')
       env = {
         'PROPERTY_SEARCH_STUB' => property_search_stub,
-        'PROPERTY_INDEX_CLEAR_MARKER' => marker
+        'PROPERTY_INDEX_CLEAR_MARKER' => marker,
+        'PROPERTY_SEARCH_CONNECT_MARKER' => connect_marker
       }
       command = [
         RbConfig.ruby,
@@ -70,7 +79,8 @@ class TestOntologyPropertyIndex < Minitest::Test
       {
         output: stdout + stderr,
         status: status,
-        clear_called: File.exist?(marker)
+        clear_called: File.exist?(marker),
+        connect_options: File.exist?(connect_marker) ? File.read(connect_marker) : nil
       }
     end
   end
@@ -117,6 +127,21 @@ class TestOntologyPropertyIndex < Minitest::Test
         class HealthyPropertySearchClient
           def get(*)
             { 'responseHeader' => { 'status' => 0 } }
+          end
+        end
+      end
+
+      module RSolr
+        def self.connect(**options)
+          File.write(
+            ENV.fetch('PROPERTY_SEARCH_CONNECT_MARKER'),
+            "#{options[:url]}|#{options[:timeout]},#{options[:open_timeout]}"
+          )
+          case ENV.fetch('PROPERTY_SEARCH_STUB')
+          when 'unreachable'
+            Goo::UnreachablePropertySearchClient.new
+          else
+            Goo::HealthyPropertySearchClient.new
           end
         end
       end

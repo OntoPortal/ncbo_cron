@@ -110,6 +110,7 @@ def valid_url?(url)
 end
 
 class PropertySearchPreflightError < StandardError; end
+PROPERTY_SEARCH_PREFLIGHT_TIMEOUT = 10
 
 def property_search_preflight_error(reason, solr_core_url)
   PropertySearchPreflightError.new(
@@ -144,7 +145,11 @@ def preflight_property_search!(solr_core_url)
   end
 
   begin
-    property_search_client.get('select', params: { q: '*:*', rows: 0, wt: 'json' })
+    RSolr.connect(
+      url: solr_core_url,
+      timeout: PROPERTY_SEARCH_PREFLIGHT_TIMEOUT,
+      open_timeout: PROPERTY_SEARCH_PREFLIGHT_TIMEOUT
+    ).get('select', params: { q: '*:*', rows: 0, wt: 'json' })
   rescue StandardError => e
     raise property_search_preflight_error(
       "unable to query the property Solr core (#{e.class}: #{e.message})",
